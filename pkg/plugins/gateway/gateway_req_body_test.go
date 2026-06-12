@@ -228,7 +228,7 @@ func Test_handleRequestBody(t *testing.T) {
 					{
 						Header: &configPb.HeaderValue{
 							Key:      "content-length",
-							RawValue: []byte("74"),
+							RawValue: []byte("81"),
 						},
 					},
 					{

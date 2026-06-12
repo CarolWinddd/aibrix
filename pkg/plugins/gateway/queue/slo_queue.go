@@ -286,10 +286,17 @@ func (q *SLOQueue) Peek(currentTime time.Time, pods types.PodList) (*types.Routi
 			_, lastErr = q.subRoute(candidate.RoutingContext, pods)
 		}
 		if candidate.RoutingContext.HasRouted() {
+			// Propagate the SLO rank (urgency score) to the routing context
+			// so the gateway can derive vLLM scheduling priority from it.
+			// candidate.Profiles[0].Rank is the best (lowest) rank across
+			// deployments and is what drove the candidate ordering above.
+			candidate.RoutingContext.SLORank = candidate.Profiles[0].Rank
 			q.lastCandidateSubKey = candidate.SubKey
 			return candidate.RoutingContext, nil
 		} else if lastErr != cache.ErrorLoadCapacityReached {
 			// We have route dicision concluded as SLO violation. Track the conclusion.
+			// Still propagate the SLO rank so vLLM can prioritize accordingly.
+			candidate.RoutingContext.SLORank = candidate.Profiles[0].Rank
 			q.lastCandidateSubKey = candidate.SubKey
 			q.lastCandidateError = lastErr
 			return candidate.RoutingContext, nil

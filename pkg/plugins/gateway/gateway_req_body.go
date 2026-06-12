@@ -19,6 +19,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 
@@ -132,6 +133,17 @@ func (s *Server) HandleRequestBody(ctx context.Context, routingCtx *types.Routin
 			klog.ErrorS(err, "failed to select target pod", "requestID", requestID, "routingStrategy", routingAlgorithm, "model", model, "routingDuration", routingCtx.GetRoutingDelay())
 			return buildErrorResponse(envoyTypePb.StatusCode_ServiceUnavailable, "error on selecting target pod", ErrorCodeServiceUnavailable, "", HeaderErrorRouting, "true"), model, stream, term
 		}
+
+		if !isAudioRequest(requestPath) && !isMultipartRequest(contentType) {
+			priority := priorityFromSLORank(routingCtx.SLORank)
+			if newBody, err := injectPriority(requestID, routingCtx.ReqBody, priority); err == nil {
+				routingCtx.ReqBody = newBody
+				klog.V(4).InfoS("injected vLLM priority", "requestID", requestID, "priority", priority, "slo_rank", routingCtx.SLORank, "routing_algorithm", routingAlgorithm)
+			} else {
+				klog.ErrorS(err, "failed to inject priority, leaving body unchanged", "requestID", requestID)
+			}
+		}
+
 		headers = buildEnvoyProxyHeaders(headers,
 			HeaderRoutingStrategy, string(routingAlgorithm),
 			HeaderTargetPod, targetPodIP,
@@ -235,4 +247,16 @@ func getRunningRequestsByPod(s *Server, podName, namespace string) float64 {
 		return 0
 	}
 	return mv.GetSimpleValue()
+}
+
+// priorityFromSLORank returns the priority derived from the SLO rank.
+// vLLM priority semantics: lower int value -> higher scheduling priority.
+// mapping:
+// 		priority = clamp(-rank * 10, -100, 100)
+func priorityFromSLORank(rank float64) int {
+	// default priority (not set) handle case
+	if rank == 0 {
+		return 0
+	}
+	return int(math.Max(math.Min(math.Round(-rank*10), 100), -100))
 }

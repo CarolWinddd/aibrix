@@ -232,6 +232,32 @@ func validateRequestBody(requestID, requestPath string, requestBody []byte, user
 	return
 }
 
+// injectPriority inspects the JSON request body for a "priority" field.
+// If already present (by the client), it returns the original body unchanged.
+// Otherwise it injects the provided priority (derived from SLO routing when
+// available, or a sensible default for non-SLO routing) and returns the
+// re-marshaled body.
+//
+// vLLM priority semantics: lower integer value = higher scheduling priority.
+func injectPriority(requestID string, requestBody []byte, priority int) ([]byte, error) {
+	var obj map[string]any
+	if err := sonic.Unmarshal(requestBody, &obj); err != nil {
+		return nil, err
+	}
+
+	if raw, ok := obj["priority"]; ok {
+		// Client already specified priority – respect it.
+		klog.V(4).InfoS("injectPriority", "requestID", requestID,
+			"priority_source", "client", "priority", raw)
+		return requestBody, nil
+	}
+
+	obj["priority"] = priority
+	klog.V(4).InfoS("injectPriority", "requestID", requestID,
+		"priority_source", "gateway", "priority", priority)
+	return sonic.Marshal(obj)
+}
+
 // isAudioRequest returns true if the request path is an audio endpoint
 func isAudioRequest(requestPath string) bool {
 	return requestPath == PathAudioTranscriptions || requestPath == PathAudioTranslations

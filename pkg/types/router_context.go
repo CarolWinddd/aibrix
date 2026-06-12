@@ -111,6 +111,12 @@ type RoutingContext struct {
 	// based on config-profile header. Nil when no config is present.
 	ConfigProfile *ResolvedConfigProfile
 
+	// SLORank is the SLO urgency score computed by SLO-aware routing (slo family).
+	// It is set by SLOQueue.Peek() during routing. Semantics (higher value = more urgent:
+	// The value is consumed by gateway priority injection to derive vLLM scheduling priority:
+	// For non-SLO routing, this field remains zero.
+	SLORank float64
+
 	targetPodSet chan struct{}
 	targetPod    atomic.Pointer[v1.Pod]
 	targetPort   atomic.Int32
@@ -353,6 +359,8 @@ func (r *RoutingContext) reset(ctx context.Context, algorithms RoutingAlgorithm,
 	r.PrefillStartTime = time.Time{}
 	r.PrefillEndTime = time.Time{}
 	// RoutedTime will not be reset, it must before ReqeustTime at this time.
+
+	r.SLORank = 0
 
 	r.RespHeaders = map[string]string{}
 	r.ConfigProfile = nil
