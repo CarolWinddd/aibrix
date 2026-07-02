@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,6 +34,7 @@ import (
 	prometheusv1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	modelv1alpha1 "github.com/vllm-project/aibrix/api/model/v1alpha1"
 	"github.com/vllm-project/aibrix/pkg/cache/discovery"
+	"github.com/vllm-project/aibrix/pkg/cache/ssemetrics"
 	"github.com/vllm-project/aibrix/pkg/constants"
 	"github.com/vllm-project/aibrix/pkg/metrics"
 	"github.com/vllm-project/aibrix/pkg/utils"
@@ -124,6 +126,10 @@ type Store struct {
 	// from Redis, grouped by pod key (namespace/name) → []fields. Swapped atomically by
 	// initGatewaySnapshotSync. Readers call Load() to get map[string][]map[string]string.
 	gatewaySnapshotCache atomic.Value
+
+	// SSE metrics management - optional enhancement
+	sseMetricManager      *ssemetrics.Manager
+	ssePodMetrics         utils.SyncMap[string, *SSEPodMetrics]
 }
 
 // Get retrieves the cache instance
@@ -381,6 +387,11 @@ func InitWithOptions(config *rest.Config, stopCh <-chan struct{}, opts InitOptio
 				// Continue without KV sync - this is not a fatal error
 			}
 		}
+
+		// Initialize SSE metrics sync
+		if err := store.initSSEMetricsSync(); err != nil {
+			klog.Errorf("Failed to initialize SSE metrics sync: %v", err)
+		}
 	})
 
 	return store
@@ -613,6 +624,67 @@ func (s *Store) cleanupKVEventSync() {
 	}
 }
 
+// initSSEMetricsSync initializes the SSE metrics synchronization system
+func (s *Store) initSSEMetricsSync() error {
+	klog.Info("Initializing SSE metrics synchronization")
+
+	sseMetricsEnabled := utils.LoadEnvBool("AIBRIX_ENABLE_SSE_METRICS", false)
+	if !sseMetricsEnabled {
+		klog.Info("SSE metrics sync is disabled")
+		return nil
+	}
+
+	s.sseMetricManager = ssemetrics.NewManager(s, s)
+	if s.sseMetricManager == nil {
+		return fmt.Errorf("failed to create SSE metric manager")
+	}
+
+	if err := s.sseMetricManager.Start(); err != nil {
+		return fmt.Errorf("failed to start SSE metrics sync: %w", err)
+	}
+
+	klog.Info("SSE metrics synchronization initialized successfully")
+	return nil
+}
+
+// cleanupSSEMetricsSync cleans up SSE metrics sync resources
+func (s *Store) cleanupSSEMetricsSync() {
+	klog.Info("Cleaning up SSE metrics sync resources")
+
+	if s.sseMetricManager != nil {
+		s.sseMetricManager.Stop()
+		s.sseMetricManager = nil
+	}
+
+	s.ssePodMetrics.Range(func(key string, _ *SSEPodMetrics) bool {
+		s.ssePodMetrics.Delete(key)
+		return true
+	})
+}
+
+// UpdateSSEMetrics implements SSEMetricsCache interface
+// currently, only PrefillTokens in output is used
+// other fields in output are resolved but not used.
+func (s *Store) UpdateSSEMetrics(podKey string, output ssemetrics.EngineStepOutput) error {
+	metrics, _ := s.ssePodMetrics.LoadOrStore(podKey, &SSEPodMetrics{})
+	if output.PrefillTokens > 0 {
+		metrics.WaitingPrefillTokens.Store(int64(math.Max(0, float64(metrics.WaitingPrefillTokens.Load())-float64(output.PrefillTokens))))
+	}
+	return nil
+}
+
+// GetSSEWaitingPrefillTokens returns the number of pending prefill tokens for a pod
+func (s *Store) GetSSEWaitingPrefillTokens(podKey string) int64 {
+	if metrics, ok := s.ssePodMetrics.Load(podKey); ok {
+		val := metrics.WaitingPrefillTokens.Load()
+		if val < 0 {
+			return 0
+		}
+		return val
+	}
+	return 0
+}
+
 // GetSyncPrefixIndexer returns the sync prefix hash indexer
 func (s *Store) GetSyncPrefixIndexer() *syncindexer.SyncPrefixHashTable {
 	// Return sync indexer only if KV sync is enabled
@@ -626,6 +698,9 @@ func (s *Store) Close() {
 
 	// Clean up KV event sync resources
 	s.cleanupKVEventSync()
+
+	// Clean up SSE metrics sync resources
+	s.cleanupSSEMetricsSync()
 
 	// Other cleanup can be added here in the future
 }

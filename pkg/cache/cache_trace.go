@@ -17,6 +17,7 @@ package cache
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"strconv"
 	"sync/atomic"
@@ -26,6 +27,7 @@ import (
 	"github.com/vllm-project/aibrix/pkg/metrics"
 	"github.com/vllm-project/aibrix/pkg/types"
 	"github.com/vllm-project/aibrix/pkg/utils"
+	"github.com/vllm-project/aibrix/pkg/utils/prefixcacheindexer"
 	"k8s.io/klog/v2"
 )
 
@@ -81,6 +83,44 @@ func (c *Store) addPodStats(ctx *types.RoutingContext, requestID string) {
 		} else if !IsError(err, ErrorMissingProfile) { // ErrorMissingProfile is not considered as an error here and should be reported where the profile is essential.
 			klog.Errorf("error on track request load consumption: %v", err)
 		}
+	}
+
+	// Update SSE waiting prefill tokens
+	if promptLen, err := ctx.PromptLength(); err == nil && promptLen > 0 {
+		podKey := utils.GeneratePodKey(pod.Namespace, pod.Name)
+
+		if c.syncPrefixIndexer != nil {
+			tokens, err := ctx.PromptTokens()
+			if err == nil {
+				tokensBytes := make([]byte, len(tokens)*4)
+				for i, tok := range tokens {
+					binary.LittleEndian.PutUint32(tokensBytes[i*4:], uint32(tok))
+				}
+				readyPods := map[string]struct{}{podKey: {}}
+				matchedPods, _ := c.syncPrefixIndexer.MatchPrefix(ctx.Model, -1, tokensBytes, readyPods)
+				if matchPercent, ok := matchedPods[podKey]; ok {
+					matchedTokens := (promptLen * matchPercent) / 100
+					promptLen -= matchedTokens
+				}
+			}
+		} else {
+			tokens, err := ctx.PromptTokens()
+			if err == nil {
+				tokensBytes := make([]byte, len(tokens)*4)
+				for i, tok := range tokens {
+					binary.LittleEndian.PutUint32(tokensBytes[i*4:], uint32(tok))
+				}
+				readyPods := map[string]struct{}{pod.Name: {}}
+				matchedPods, _ := prefixcacheindexer.GetSharedPrefixHashTable().MatchPrefix(tokensBytes, ctx.Model, readyPods)
+				if matchPercent, ok := matchedPods[pod.Name]; ok {
+					matchedTokens := (promptLen * matchPercent) / 100
+					promptLen -= matchedTokens
+				}
+			}
+		}
+
+		sseMetrics, _ := c.ssePodMetrics.LoadOrStore(podKey, &SSEPodMetrics{})
+		sseMetrics.WaitingPrefillTokens.Add(int64(promptLen))
 	}
 
 	if metaPod.CanLogPodTrace(5) {

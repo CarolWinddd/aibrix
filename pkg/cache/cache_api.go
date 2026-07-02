@@ -17,6 +17,7 @@ limitations under the License.
 package cache
 
 import (
+	"github.com/vllm-project/aibrix/pkg/cache/ssemetrics"
 	"github.com/vllm-project/aibrix/pkg/metrics"
 	"github.com/vllm-project/aibrix/pkg/types"
 	v1 "k8s.io/api/core/v1"
@@ -30,6 +31,7 @@ type Cache interface {
 	RequestTracker
 	RequestTrackerRegistry
 	ProfileCache
+	SSEMetricsCache
 	types.OutputPredictorProvider
 	types.RouterProvider
 }
@@ -170,4 +172,22 @@ type ProfileCache interface {
 	//   deploymentName: Name of the deployment
 	//   modelName: Name of the model
 	GetModelProfileByDeploymentName(deploymentName string, modelName string) (*ModelGPUProfile, error)
+}
+
+// SSEMetricsCache defines operations for SSE metrics caching
+type SSEMetricsCache interface {
+	// UpdateSSEMetrics updates the SSE metrics for a pod
+	// Parameters:
+	//   podKey: Pod key (namespace/name)
+	//   output: Engine step output containing metrics data
+	// Returns:
+	//   error: Error information if operation fails
+	UpdateSSEMetrics(podKey string, output ssemetrics.EngineStepOutput) error
+
+	// GetSSEWaitingPrefillTokens returns the number of pending prefill tokens for a pod
+	// Parameters:
+	//   podKey: Pod key (namespace/name)
+	// Returns:
+	//   int64: Number of waiting prefill tokens
+	GetSSEWaitingPrefillTokens(podKey string) int64
 }

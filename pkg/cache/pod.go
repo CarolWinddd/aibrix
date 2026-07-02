@@ -56,3 +56,8 @@ func (pod *Pod) CanLogPodTrace(level klog.Level) bool {
 	// Ensure only one attempt pass.
 	return atomic.CompareAndSwapInt64(&pod.lastTraceLogTimestamp, lastTs, ts)
 }
+
+// SSEPodMetrics contains realtime metrics from SSE stream for a pod
+type SSEPodMetrics struct {
+	WaitingPrefillTokens atomic.Int64
+}

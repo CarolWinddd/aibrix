@@ -16,10 +16,12 @@ limitations under the License.
 package cache
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"time"
 
+	"github.com/vllm-project/aibrix/pkg/cache/ssemetrics"
 	crdinformers "github.com/vllm-project/aibrix/pkg/client/informers/externalversions"
 	"github.com/vllm-project/aibrix/pkg/constants"
 	"github.com/vllm-project/aibrix/pkg/utils"
@@ -142,6 +144,24 @@ func (c *Store) addPod(obj interface{}) {
 	if c.kvEventManager != nil {
 		c.kvEventManager.OnPodAdd(pod)
 	}
+
+	// Notify SSE metrics manager
+	if c.sseMetricManager != nil {
+		podKey := utils.GeneratePodKey(pod.Namespace, pod.Name)
+		podInfo := &ssemetrics.PodInfo{
+			Name:      pod.Name,
+			Namespace: pod.Namespace,
+			PodIP:     pod.Status.PodIP,
+			ModelName: modelName,
+			Labels:    pod.Labels,
+			Models:    metaPod.Models.Array(),
+		}
+		go func() {
+			if err := c.sseMetricManager.SubscribeToPod(context.Background(), podKey, podInfo); err != nil {
+				klog.Errorf("Failed to subscribe SSE for pod %s: %v", podKey, err)
+			}
+		}()
+	}
 }
 
 func (c *Store) updatePod(oldObj interface{}, newObj interface{}) {
@@ -237,6 +257,12 @@ func (c *Store) deletePod(obj interface{}) {
 	// Notify KV event manager first (before lock)
 	if c.kvEventManager != nil && pod != nil {
 		c.kvEventManager.OnPodDelete(pod)
+	}
+
+	// Notify SSE metrics manager
+	if c.sseMetricManager != nil {
+		podKey := utils.GeneratePodKey(namespace, name)
+		c.sseMetricManager.UnsubscribeFromPod(podKey)
 	}
 
 	c.mu.Lock()

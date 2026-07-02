@@ -17,9 +17,11 @@ limitations under the License.
 package cache
 
 import (
+	"context"
 	"fmt"
 	"sync/atomic"
 
+	"github.com/vllm-project/aibrix/pkg/cache/ssemetrics"
 	"github.com/vllm-project/aibrix/pkg/metrics"
 	"github.com/vllm-project/aibrix/pkg/types"
 	"github.com/vllm-project/aibrix/pkg/utils"
@@ -355,4 +357,40 @@ func (c *Store) GetRouter(ctx *types.RoutingContext) (types.Router, error) {
 
 func (c *Store) RegisterRequestTracker(tracker RequestTracker) {
 	c.requestTrackers = append(c.requestTrackers, tracker)
+}
+
+// SSEGetPod implements ssemetrics.PodProvider interface
+func (c *Store) SSEGetPod(ctx context.Context, podKey string) (*ssemetrics.PodInfo, bool) {
+	metaPod, ok := c.metaPods.Load(podKey)
+	if !ok {
+		return nil, false
+	}
+
+	modelName, _ := getModelNameFromPod(metaPod.Pod)
+
+	return &ssemetrics.PodInfo{
+		Name:      metaPod.Name,
+		Namespace: metaPod.Namespace,
+		PodIP:     metaPod.Pod.Status.PodIP,
+		ModelName: modelName,
+		Labels:    metaPod.Labels,
+		Models:    metaPod.Models.Array(),
+	}, true
+}
+
+// SSERangePods implements ssemetrics.PodProvider interface
+func (c *Store) SSERangePods(ctx context.Context, f func(key string, pod *ssemetrics.PodInfo) bool) error {
+	c.metaPods.Range(func(key string, metaPod *Pod) bool {
+		modelName, _ := getModelNameFromPod(metaPod.Pod)
+		podInfo := &ssemetrics.PodInfo{
+			Name:      metaPod.Name,
+			Namespace: metaPod.Namespace,
+			PodIP:     metaPod.Pod.Status.PodIP,
+			ModelName: modelName,
+			Labels:    metaPod.Labels,
+			Models:    metaPod.Models.Array(),
+		}
+		return f(key, podInfo)
+	})
+	return nil
 }
