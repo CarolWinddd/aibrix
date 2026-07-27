@@ -47,7 +47,6 @@ type Manager struct {
 	podProvider  PodProvider
 	cache        SSEMetricsCache
 	subscribers  utils.SyncMap[string, *SSEClient] // podKey -> SSEClient
-	enabled      bool
 	ctx          context.Context
 	cancel       context.CancelFunc
 	mu           sync.RWMutex
@@ -55,25 +54,21 @@ type Manager struct {
 }
 
 func NewManager(podProvider PodProvider, cache SSEMetricsCache) *Manager {
-	ctx, cancel := context.WithCancel(context.Background())
+	if !Enabled() {
+		return nil
+	}
 
-	enabled := utils.LoadEnvBool("AIBRIX_ENABLE_SSE_METRICS", false)
+	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Manager{
 		podProvider: podProvider,
 		cache:       cache,
-		enabled:     enabled,
 		ctx:         ctx,
 		cancel:      cancel,
 	}
 }
 
 func (m *Manager) Start() error {
-	if !m.enabled {
-		klog.Info("SSE metrics sync is disabled")
-		return nil
-	}
-
 	klog.Info("Starting SSE metrics manager")
 
 	if m.cache == nil {
@@ -126,10 +121,6 @@ func (m *Manager) Stop() {
 }
 
 func (m *Manager) SubscribeToPod(ctx context.Context, podKey string, podInfo *PodInfo) error {
-	if !m.enabled {
-		return nil
-	}
-
 	if !m.canSubscribeToPod(podInfo) {
 		return fmt.Errorf("pod %s is not eligible for SSE metrics subscription", podKey)
 	}
@@ -138,10 +129,6 @@ func (m *Manager) SubscribeToPod(ctx context.Context, podKey string, podInfo *Po
 }
 
 func (m *Manager) UnsubscribeFromPod(podKey string) {
-	if !m.enabled {
-		return
-	}
-
 	if client, ok := m.subscribers.LoadAndDelete(podKey); ok {
 		client.Stop()
 		klog.Infof("Unsubscribed from pod %s", podKey)

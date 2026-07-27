@@ -127,9 +127,9 @@ type Store struct {
 	// initGatewaySnapshotSync. Readers call Load() to get map[string][]map[string]string.
 	gatewaySnapshotCache atomic.Value
 
-	// SSE metrics management - optional enhancement
+	// SSE metrics management - optional enhancement (nil when disabled)
 	sseMetricManager      *ssemetrics.Manager
-	ssePodMetrics         utils.SyncMap[string, *SSEPodMetrics]
+	ssePodMetrics         *utils.SyncMap[string, *SSEPodMetrics]
 }
 
 // Get retrieves the cache instance
@@ -389,8 +389,12 @@ func InitWithOptions(config *rest.Config, stopCh <-chan struct{}, opts InitOptio
 		}
 
 		// Initialize SSE metrics sync
-		if err := store.initSSEMetricsSync(); err != nil {
-			klog.Errorf("Failed to initialize SSE metrics sync: %v", err)
+		if ssemetrics.Enabled() {
+			if err := store.initSSEMetricsSync(); err != nil {
+				klog.Errorf("Failed to initialize SSE metrics sync: %v", err)
+			}
+		} else {
+			klog.Info("SSE metrics sync is disabled")
 		}
 	})
 
@@ -628,11 +632,7 @@ func (s *Store) cleanupKVEventSync() {
 func (s *Store) initSSEMetricsSync() error {
 	klog.Info("Initializing SSE metrics synchronization")
 
-	sseMetricsEnabled := utils.LoadEnvBool("AIBRIX_ENABLE_SSE_METRICS", false)
-	if !sseMetricsEnabled {
-		klog.Info("SSE metrics sync is disabled")
-		return nil
-	}
+	s.ssePodMetrics = &utils.SyncMap[string, *SSEPodMetrics]{}
 
 	s.sseMetricManager = ssemetrics.NewManager(s, s)
 	if s.sseMetricManager == nil {
@@ -656,16 +656,22 @@ func (s *Store) cleanupSSEMetricsSync() {
 		s.sseMetricManager = nil
 	}
 
-	s.ssePodMetrics.Range(func(key string, _ *SSEPodMetrics) bool {
-		s.ssePodMetrics.Delete(key)
-		return true
-	})
+	if s.ssePodMetrics != nil {
+		s.ssePodMetrics.Range(func(key string, _ *SSEPodMetrics) bool {
+			s.ssePodMetrics.Delete(key)
+			return true
+		})
+		s.ssePodMetrics = nil
+	}
 }
 
 // UpdateSSEMetrics implements SSEMetricsCache interface
 // currently, only PrefillTokens in output is used
 // other fields in output are resolved but not used.
 func (s *Store) UpdateSSEMetrics(podKey string, output ssemetrics.EngineStepOutput) error {
+	if s.ssePodMetrics == nil {
+		return nil
+	}
 	metrics, _ := s.ssePodMetrics.LoadOrStore(podKey, &SSEPodMetrics{})
 	if output.PrefillTokens > 0 {
 		metrics.WaitingPrefillTokens.Store(int64(math.Max(0, float64(metrics.WaitingPrefillTokens.Load())-float64(output.PrefillTokens))))
@@ -675,6 +681,9 @@ func (s *Store) UpdateSSEMetrics(podKey string, output ssemetrics.EngineStepOutp
 
 // GetSSEWaitingPrefillTokens returns the number of pending prefill tokens for a pod
 func (s *Store) GetSSEWaitingPrefillTokens(podKey string) int64 {
+	if s.ssePodMetrics == nil {
+		return 0
+	}
 	if metrics, ok := s.ssePodMetrics.Load(podKey); ok {
 		val := metrics.WaitingPrefillTokens.Load()
 		if val < 0 {

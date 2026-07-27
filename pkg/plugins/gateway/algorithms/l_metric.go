@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/vllm-project/aibrix/pkg/cache"
+	"github.com/vllm-project/aibrix/pkg/cache/ssemetrics"
 	"github.com/vllm-project/aibrix/pkg/constants"
 	"github.com/vllm-project/aibrix/pkg/metrics"
 	"github.com/vllm-project/aibrix/pkg/types"
@@ -36,7 +37,9 @@ import (
 const RouterLMetric types.RoutingAlgorithm = "l-metric"
 
 func init() {
-	Register(RouterLMetric, NewLMetricRouter)
+	if ssemetrics.Enabled() {
+		Register(RouterLMetric, NewLMetricRouter)
+	}
 }
 
 type lMetricRouter struct {

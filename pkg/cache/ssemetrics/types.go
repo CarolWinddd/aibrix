@@ -17,6 +17,8 @@ package ssemetrics
 import (
 	"net"
 	"time"
+
+	"github.com/vllm-project/aibrix/pkg/utils"
 )
 
 const (
@@ -27,6 +29,18 @@ const (
 	ReconnectBackoffFactor    = 2.0
 	EventChannelBufferSize    = 1000
 )
+
+var (
+	enabled bool
+)
+
+func init() {
+	enabled = utils.LoadEnvBool("AIBRIX_ENABLE_SSE_METRICS", false)
+}
+
+func Enabled() bool {
+	return enabled
+}
 
 type SSEClientConfig struct {
 	PodKey         string

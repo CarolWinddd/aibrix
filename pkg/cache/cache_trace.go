@@ -119,8 +119,11 @@ func (c *Store) addPodStats(ctx *types.RoutingContext, requestID string) {
 			}
 		}
 
-		sseMetrics, _ := c.ssePodMetrics.LoadOrStore(podKey, &SSEPodMetrics{})
-		sseMetrics.WaitingPrefillTokens.Add(int64(promptLen))
+		// Update SSE waiting prefill tokens
+		if c.ssePodMetrics != nil {
+			sseMetrics, _ := c.ssePodMetrics.LoadOrStore(podKey, &SSEPodMetrics{})
+			sseMetrics.WaitingPrefillTokens.Add(int64(promptLen))
+		}
 	}
 
 	if metaPod.CanLogPodTrace(5) {
