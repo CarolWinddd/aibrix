@@ -20,7 +20,8 @@ completed_sessions = asyncio.Queue()
 
 async def send_request_streaming(client: openai.AsyncOpenAI,
                              model: str,
-                             max_output: int, 
+                             max_tokens: int,
+                             min_tokens: int,
                              request: Dict,
                              output_file: str,
                              request_id: int,
@@ -42,13 +43,15 @@ async def send_request_streaming(client: openai.AsyncOpenAI,
         if target_time > start_time:
             await asyncio.sleep(target_time - start_time)
         dispatch_time = asyncio.get_event_loop().time()
+        extra_body = {"min_tokens": min_tokens} if min_tokens > 0 else {}
         response_stream = await client.chat.completions.create(
             model=model,
             messages=prompt,
             temperature=0,
-            max_tokens=max_output,
+            max_tokens=max_tokens,
             stream=True,
             stream_options={"include_usage": True},
+            extra_body=extra_body,
         )
         if hasattr(response_stream, 'response') and hasattr(response_stream.response, 'headers'):
             target_pod = response_stream.response.headers.get('target-pod')
@@ -162,7 +165,8 @@ async def send_request_streaming(client: openai.AsyncOpenAI,
 # Asynchronous request handler
 async def send_request_batch(client: openai.AsyncOpenAI,
                              model: str,
-                             max_output: int, 
+                             max_tokens: int,
+                             min_tokens: int,
                              request: Dict,
                              output_file: str,
                              request_id: int,
@@ -182,11 +186,13 @@ async def send_request_batch(client: openai.AsyncOpenAI,
         if target_time > start_time:
             await asyncio.sleep(target_time - start_time)
         dispatch_time = asyncio.get_event_loop().time()
+        extra_body = {"min_tokens": min_tokens} if min_tokens > 0 else {}
         response = await client.chat.completions.create(
             model=model,
             messages=prompt,
             temperature=0,
-            max_tokens=max_output,
+            max_tokens=max_tokens,
+            extra_body=extra_body,
         )
         if hasattr(response, 'response') and hasattr(response.response, 'headers'):
             target_pod = response.response.headers.get('target-pod')
@@ -300,11 +306,19 @@ async def benchmark_launch(
 
         def send(request):
             nonlocal request_id, num_requests
+            output_length = request.get("output_length", None)
+            if output_length is not None and output_length > 0:
+                max_tokens = min(output_length, max_output)
+                min_tokens = max_tokens
+            else:
+                max_tokens = max_output
+                min_tokens = 0
             task = asyncio.create_task(
                 send_request_func(
                     client=client,
                     model=model,
-                    max_output=max_output,
+                    max_tokens=max_tokens,
+                    min_tokens=min_tokens,
                     request=request,
                     output_file=output_file,
                     request_id=request_id,
